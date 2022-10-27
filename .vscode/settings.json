@@ -550,6 +550,10 @@
         "complex": "cpp",
         "coroutine": "cpp",
         "resumable": "cpp",
-        "typeindex": "cpp"
+        "typeindex": "cpp",
+        "codecvt": "cpp",
+        "source_location": "cpp",
+        "strstream": "cpp",
+        "*.ipp": "cpp"
     },
 }
