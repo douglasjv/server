@@ -32,7 +32,7 @@ CPMAddPackage(
     VERSION 1.24.1
     GITHUB_REPOSITORY chriskohlhoff/asio
     GIT_TAG asio-1-24-0 # asio uses non-standard version tag, we must specify GIT_TAG
-)
+) #defines asio
 
 # ASIO doesn't use CMake, we have to configure it manually. Extra notes for using on Windows:
 #
@@ -81,6 +81,13 @@ if(asio_ADDED)
     endif()
 endif()
 
+# TODO: std::jthread lands in C++20. Remove this once all compilers for all platforms implement.
+CPMAddPackage(
+    NAME jthread-lite
+    GITHUB_REPOSITORY martinmoene/jthread-lite
+    GIT_TAG 5332bbd46dcba5f028a844795cc0931e9f2ffdf4
+) # defines: jthread-lite
+
 set(EXTERNAL_LIBS
     concurrentqueue
     mariadbclient
@@ -91,6 +98,7 @@ set(EXTERNAL_LIBS
     argparse
     efsw
     asio
+    jthread-lite
 )
 
 if(WIN32)
