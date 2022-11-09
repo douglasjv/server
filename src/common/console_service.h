@@ -28,7 +28,8 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <thread>
+
+#include <nonstd/jthread.hpp>
 
 #include "logging.h"
 #include "taskmgr.h"
@@ -67,9 +68,10 @@ public:
     void stop();
 
 private:
-    std::thread       m_consoleInputThread;
-    std::mutex        m_consoleInputBottleneck;
-    std::atomic<bool> m_consoleThreadRun = true;
+    std::mutex              m_consoleInputBottleneck;
+    std::atomic<bool>       m_consoleThreadRun = true;
+    nonstd::jthread         m_consoleInputThread;
+    std::condition_variable m_consoleStopCondition;
 
     std::unordered_map<std::string, ConsoleCommand> m_commands;
 

@@ -65,22 +65,25 @@ ConsoleService::ConsoleService()
     {
         ShowInfo("Console input thread is ready...");
         ShowInfo("Type 'help' for a list of available commands.");
-        m_consoleInputThread = std::thread([&]()
+        m_consoleInputThread = nonstd::jthread([&]()
         {
             auto lastInputTime = server_clock::now();
+            std::string line;
 
             while (m_consoleThreadRun)
             {
-                if ((server_clock::now() - lastInputTime) > 1s)
+                std::unique_lock<std::mutex> lock(m_consoleInputBottleneck);
+
+                // https://en.cppreference.com/w/cpp/thread/condition_variable/wait_for
+                if (!m_consoleStopCondition.wait_for(lock, 250ms, [&]{ return !m_consoleThreadRun; }))
                 {
-                    std::lock_guard lock(m_consoleInputBottleneck);
                     std::string line;
 
-                    line = getLine();
+                    line += getLine();
 
-                    if (!m_consoleThreadRun)
+                    if (line.find('\n') == line.end())
                     {
-                        break;
+                        continue;
                     }
 
                     std::istringstream stream(line);
@@ -110,7 +113,6 @@ ConsoleService::ConsoleService()
                         }
                     }
                 }
-                std::this_thread::sleep_for(250ms); // TODO: Do this better
             };
             fmt::print("Console input thread exiting...\n");
         });
@@ -120,19 +122,16 @@ ConsoleService::ConsoleService()
 
 ConsoleService::~ConsoleService()
 {
-    m_consoleThreadRun = false;
-
-    if (m_consoleInputThread.joinable())
-    {
-        m_consoleInputThread.join();
-    }
+    stop();
+    m_consoleStopCondition.notify_all();
 }
 
 // NOTE: If you capture things in this function, make sure they're protected (locked or atomic)!
 // NOTE: If you're going to print, use fmt::print, rather than ShowInfo etc.
 void ConsoleService::RegisterCommand(std::string const& name, std::string const& description, std::function<void(std::vector<std::string>)> func)
 {
-    std::lock_guard lock(m_consoleInputBottleneck);
+    std::lock_guard<std::mutex> lock(m_consoleInputBottleneck);
+
     m_commands[name] = ConsoleCommand{ name, description, func };
 }
 
@@ -150,45 +149,52 @@ std::string ConsoleService::getLine()
     INPUT_RECORD record;
     DWORD        numEvents;
 
-    while (m_consoleThreadRun)
+    // Since ReadConsoleInput is blocking, we want to ask it in a non-blocking way if
+    // there are any events to handle before we get there.
+    // https://learn.microsoft.com/en-us/windows/console/getnumberofconsoleinputevents
+    GetNumberOfConsoleInputEvents(GetStdHandle(STD_INPUT_HANDLE), &numEvents);
+    if (numEvents == 0)
     {
-        if (!ReadConsoleInput(GetStdHandle(STD_INPUT_HANDLE), &record, 1, &numEvents))
+        return "";
+    }
+
+    // https://learn.microsoft.com/en-us/windows/console/readconsoleinput
+    if (!ReadConsoleInput(GetStdHandle(STD_INPUT_HANDLE), &record, 1, &numEvents))
+    {
+        return ""; // this is an error state, does this happen in the real world?
+    }
+
+    if (record.EventType != KEY_EVENT)
+    {
+        return "";
+    }
+
+    if (record.Event.KeyEvent.bKeyDown) // only take input on keydown, not key up
+    {
+        WCHAR keyCharacter = record.Event.KeyEvent.uChar.UnicodeChar;
+
+        if (keyCharacter == '\b')
         {
-            continue; // this is an error state, does this happen in the real world?
+            fmt::print("\b \b"); // move cursor left, overwrite with space, move cursor left
+            if (line.size() > 0)
+            {
+                line.pop_back(); // remove last char in buffer if any
+            }
+            return "";
         }
 
-        if (record.EventType != KEY_EVENT)
+        fmt::print("{:c}", keyCharacter); // echo character back to console, apparently using ReadConsoleInput & GetStdHandle prevents echo?
+        if (keyCharacter == '\r')
         {
-            continue;
+            fmt::print("\n"); // Windows needs \r\n for newlines in the console, but the enter key is only \r.
         }
 
-        if (record.Event.KeyEvent.bKeyDown) // only take input on keydown, not key up
+        if (std::isprint(keyCharacter))
         {
-            WCHAR keyCharacter = record.Event.KeyEvent.uChar.UnicodeChar;
-
-            if (keyCharacter == '\b')
-            {
-                fmt::print("\b \b"); // move cursor left, overwrite with space, move cursor left
-                if (line.size() > 0)
-                {
-                    line.pop_back(); // remove last char in buffer if any
-                }
-                continue;
-            }
-
-            fmt::print("{:c}", keyCharacter); // echo character back to console, apparently using ReadConsoleInput & GetStdHandle prevents echo?
-            if (keyCharacter == '\r')
-            {
-                fmt::print("\n"); // Windows needs \r\n for newlines in the console, but the enter key is only \r.
-                break;
-            }
-
-            if (std::isprint(keyCharacter))
-            {
-                line += keyCharacter;
-            }
+            line += keyCharacter;
         }
     }
+
 // Linux has a proper polling system for stdin
 #else
     struct pollfd pollFileDescriptor = { STDIN_FILENO, POLLIN, 0 };
